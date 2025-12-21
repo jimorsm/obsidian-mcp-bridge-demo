@@ -1,0 +1,10 @@
+{
+  "id": "obsidian-mcp-excalidraw-bridge-demo",
+  "name": "MCP Excalidraw Bridge Demo",
+  "version": "0.0.1",
+  "minAppVersion": "1.4.0",
+  "description": "Demo bridge plugin for syncing MCP Excalidraw canvas with Obsidian Excalidraw.",
+  "author": "demo",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}

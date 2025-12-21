@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+
+# build output
+main.js
+main.js.map
