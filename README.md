@@ -199,6 +199,13 @@ sequenceDiagram
 - Canvas Server **只通过 WebSocket 广播**给 UI/客户端，不会向 MCP Server 推送。
 - Canvas UI 的“同步”是**全量** `POST /api/elements/sync`，更新的是 Canvas Server 内存状态，并不会直接影响 MCP Server。
 
+### 运行时 Canvas Server 与 MCP 的绘制/导出关系
+
+- MCP Server 不维护独立元素仓库，`create_element`/`batch_create_elements` 直接写入 Canvas Server 的 REST 接口。
+- Canvas Server 的元素存储是运行时内存 Map，只要服务在运行，MCP 就能创建/更新图形并立即在 UI 侧通过 WS 反映。
+- MCP 的导出（`get_resource: elements` 或 `query_elements`）也是从 Canvas Server 的 `/api/elements` 读取内存数据，所以运行时数据可被直接导出。
+- 若 Canvas Server 不运行或不可达，MCP 会返回 “HTTP server unavailable” 的错误，无法绘制或导出。
+
 ## 构建与安装
 
 1. Install dependencies in this folder:
