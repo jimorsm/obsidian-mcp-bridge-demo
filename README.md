@@ -259,6 +259,8 @@ sequenceDiagram
 - 若没有活跃视图且收到创建请求，Bridge 会**自动创建并打开**新绘图，再写入元素。
 - 视图写入后由 Obsidian Excalidraw 处理保存（dirty + autosave）。
 - Bridge 不做出栈同步，Obsidian 端不会主动推送本地变更到 MCP。
+- Bridge 支持 `label.text`，用于非 `text` 元素的标签写入。
+- Mermaid 转换链路在该 Bridge Demo 中暂不支持。
 
 ### 接口
 
@@ -269,9 +271,17 @@ sequenceDiagram
 - `POST /api/elements/sync`
 - `GET /api/elements`
 - `GET /api/elements/:id`
+- `GET /api/elements/search`
 - `GET /api/sync/status`
 
 说明：`GET /api/elements` 与 `GET /api/elements/:id` 会直接读取当前活跃 Excalidraw 视图中的元素并返回。
+说明：`GET /api/elements/search` 支持 `type` 及任意字段的等值过滤（按 query 参数匹配）。
+说明：Mermaid 转换链路在该 Bridge Demo 中暂不支持（未实现 `/api/elements/from-mermaid`）。
+
+### 兼容性说明
+
+- Bridge Demo 只支持以下元素类型：`rectangle`、`ellipse`、`diamond`、`text`、`arrow`、`line`。
+- `freedraw`、`label` 等类型会被忽略并返回成功，但不会写入视图。
 
 ### 时序图
 
@@ -350,3 +360,6 @@ MCP server 只需把 `EXPRESS_SERVER_URL` 指向此代理，即可把图元实�
   "serverPort": 3030
 }
 ```
+
+也可以在 Obsidian 的插件设置界面中直接配置：  
+Settings → Community plugins → MCP Excalidraw Bridge Demo。

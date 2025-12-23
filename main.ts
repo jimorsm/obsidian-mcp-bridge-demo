@@ -1,4 +1,4 @@
-import { Notice, Plugin } from "obsidian";
+import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
 import http, { IncomingMessage, ServerResponse } from "http";
 
 type Point = { x: number; y: number };
@@ -17,6 +17,9 @@ type ServerElement = {
   roughness?: number;
   opacity?: number;
   text?: string;
+  label?: {
+    text?: string;
+  };
   fontSize?: number;
   fontFamily?: string | number;
   points?: Point[];
@@ -33,6 +36,9 @@ type ViewElement = {
   height?: number;
   points?: Point[];
   text?: string;
+  label?: {
+    text?: string;
+  };
   backgroundColor?: string;
   strokeColor?: string;
   strokeWidth?: number;
@@ -59,12 +65,12 @@ const DEFAULT_SETTINGS: BridgeSettings = {
 export default class McpExcalidrawBridgeDemo extends Plugin {
   private settings: BridgeSettings = DEFAULT_SETTINGS;
   private proxyServer: http.Server | null = null;
-  private elements = new Map<string, ServerElement>();
 
   async onload() {
     await this.loadSettings();
 
     this.startProxyServer();
+    this.addSettingTab(new BridgeSettingTab(this.app, this));
   }
 
   onunload() {
@@ -74,6 +80,10 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
   private async loadSettings() {
     const loaded = (await this.loadData()) as Partial<BridgeSettings> | null;
     this.settings = { ...DEFAULT_SETTINGS, ...(loaded ?? {}) };
+  }
+
+  private async saveSettings() {
+    await this.saveData(this.settings);
   }
 
   private getTargetExcalidrawView(): any | null {
@@ -152,6 +162,11 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
     }
   }
 
+  private getElementText(element: ServerElement): string | undefined {
+    if (element.type === "text") return element.text;
+    return element.label?.text ?? element.text;
+  }
+
   private pointsToPairs(points?: Point[]): [number, number][] {
     if (!points || points.length === 0) return [[0, 0], [0, 0]];
     if (Array.isArray(points[0])) {
@@ -160,10 +175,7 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
     return (points as Point[]).map((p) => [p.x, p.y]);
   }
 
-  private async applyCreate(element: ServerElement, silent: boolean = false) {
-    const view = await this.getViewForWrite(silent, true);
-    if (!view) return;
-
+  private async createElementInView(view: any, element: ServerElement, silent: boolean) {
     const ea = this.getEA(view);
     if (!ea) {
       if (!silent) new Notice("Excalidraw Automate API not available");
@@ -184,13 +196,17 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
         ea.addDiamond(element.x, element.y, element.width ?? 100, element.height ?? 60, element.id);
         break;
       case "text":
-        ea.addText(element.x, element.y, element.text ?? "", undefined, element.id);
+        ea.addText(element.x, element.y, this.getElementText(element) ?? "", undefined, element.id);
         break;
       case "arrow":
-        ea.addArrow(this.pointsToPairs(element.points), {
-          startArrowHead: element.startArrowhead ?? undefined,
-          endArrowHead: element.endArrowhead ?? undefined,
-        }, element.id);
+        ea.addArrow(
+          this.pointsToPairs(element.points),
+          {
+            startArrowHead: element.startArrowhead ?? undefined,
+            endArrowHead: element.endArrowhead ?? undefined,
+          },
+          element.id,
+        );
         break;
       case "line":
         ea.addLine(this.pointsToPairs(element.points), element.id);
@@ -203,7 +219,12 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
 
     await ea.addElementsToView(false, true, true);
     ea.destroy();
-    this.elements.set(element.id, element);
+  }
+
+  private async applyCreate(element: ServerElement, silent: boolean = false) {
+    const view = await this.getViewForWrite(silent, true);
+    if (!view) return;
+    await this.createElementInView(view, element, silent);
   }
 
   private async applyUpdate(element: ServerElement, silent: boolean = false) {
@@ -219,7 +240,7 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
     }
 
     ea.destroy();
-    await this.applyCreate(element, silent);
+    await this.createElementInView(view, element, silent);
   }
 
   private async applyDelete(elementId: string, silent: boolean = false) {
@@ -235,7 +256,6 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
     }
 
     ea.destroy();
-    this.elements.delete(elementId);
   }
 
   private getElementsFromView(view: any): ServerElement[] {
@@ -252,6 +272,7 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
       height: element.height,
       points: element.points,
       text: element.text,
+      label: element.label,
       backgroundColor: element.backgroundColor,
       strokeColor: element.strokeColor,
       strokeWidth: element.strokeWidth,
@@ -284,6 +305,13 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
     }
   }
 
+  private async updateProxyServer() {
+    this.stopProxyServer();
+    if (this.settings.serverEnabled) {
+      this.startProxyServer();
+    }
+  }
+
   private async handleProxyRequest(req: IncomingMessage, res: ServerResponse) {
     try {
       const url = new URL(req.url ?? "/", `http://${this.settings.serverHost}:${this.settings.serverPort}`);
@@ -292,25 +320,26 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
 
       if (method === "GET" && pathname === "/api/elements") {
         const view = await this.getViewForWrite(true);
-        if (view) {
-          const viewElements = this.getElementsFromView(view);
-          return this.sendJson(res, 200, {
-            success: true,
-            elements: viewElements,
-            count: viewElements.length,
-          });
+        if (!view) {
+          return this.sendJson(res, 400, { success: false, error: "No active Excalidraw view" });
         }
+        const viewElements = this.getElementsFromView(view);
         return this.sendJson(res, 200, {
           success: true,
-          elements: Array.from(this.elements.values()),
-          count: this.elements.size,
+          elements: viewElements,
+          count: viewElements.length,
         });
       }
 
       if (method === "GET" && pathname === "/api/sync/status") {
+        const view = await this.getViewForWrite(true);
+        if (!view) {
+          return this.sendJson(res, 400, { success: false, error: "No active Excalidraw view" });
+        }
+        const viewElements = this.getElementsFromView(view);
         return this.sendJson(res, 200, {
           success: true,
-          count: this.elements.size,
+          count: viewElements.length,
           timestamp: new Date().toISOString(),
         });
       }
@@ -318,75 +347,116 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
       if (method === "GET" && pathname.startsWith("/api/elements/")) {
         const id = pathname.split("/").pop() ?? "";
         const view = await this.getViewForWrite(true);
-        if (view) {
-          const viewElements = this.getElementsFromView(view);
-          const element = viewElements.find((item) => item.id === id);
-          if (!element) {
-            return this.sendJson(res, 404, { success: false, error: "Element not found" });
-          }
-          return this.sendJson(res, 200, { success: true, element });
+        if (!view) {
+          return this.sendJson(res, 400, { success: false, error: "No active Excalidraw view" });
         }
-        const element = this.elements.get(id);
+        const viewElements = this.getElementsFromView(view);
+        const element = viewElements.find((item) => item.id === id);
         if (!element) {
           return this.sendJson(res, 404, { success: false, error: "Element not found" });
         }
         return this.sendJson(res, 200, { success: true, element });
       }
 
+      if (method === "GET" && pathname === "/api/elements/search") {
+        const view = await this.getViewForWrite(true);
+        if (!view) {
+          return this.sendJson(res, 400, { success: false, error: "No active Excalidraw view" });
+        }
+        const viewElements = this.getElementsFromView(view);
+        const params = url.searchParams;
+        const typeFilter = params.get("type");
+        const results = viewElements.filter((element) => {
+          if (typeFilter && element.type !== typeFilter) return false;
+          for (const [key, value] of params.entries()) {
+            if (key === "type") continue;
+            const elementValue = (element as Record<string, unknown>)[key];
+            if (typeof elementValue === "undefined") return false;
+            if (String(elementValue) !== value) return false;
+          }
+          return true;
+        });
+        return this.sendJson(res, 200, { success: true, elements: results, count: results.length });
+      }
+
       if (method === "POST" && pathname === "/api/elements") {
         const body = await this.readJson(req);
         const element = this.normalizeElement(body);
-        this.elements.set(element.id, element);
         await this.applyCreate(element, true);
         return this.sendJson(res, 200, { success: true, element });
       }
 
       if (method === "PUT" && pathname.startsWith("/api/elements/")) {
         const id = pathname.split("/").pop() ?? "";
-        const body = await this.readJson(req);
-        const existing = this.elements.get(id);
+        const view = await this.getViewForWrite(true);
+        if (!view) {
+          return this.sendJson(res, 400, { success: false, error: "No active Excalidraw view" });
+        }
+        const viewElements = this.getElementsFromView(view);
+        const existing = viewElements.find((item) => item.id === id);
         if (!existing) {
           return this.sendJson(res, 404, { success: false, error: "Element not found" });
         }
-        const updated = { ...existing, ...body, id };
-        this.elements.set(id, updated);
+        const body = await this.readJson(req);
+        const updated = { ...existing, ...body, id } as ServerElement;
         await this.applyUpdate(updated, true);
         return this.sendJson(res, 200, { success: true, element: updated });
       }
 
       if (method === "DELETE" && pathname.startsWith("/api/elements/")) {
         const id = pathname.split("/").pop() ?? "";
-        if (!this.elements.has(id)) {
+        const view = await this.getViewForWrite(true);
+        if (!view) {
+          return this.sendJson(res, 400, { success: false, error: "No active Excalidraw view" });
+        }
+        const viewElements = this.getElementsFromView(view);
+        const existing = viewElements.find((item) => item.id === id);
+        if (!existing) {
           return this.sendJson(res, 404, { success: false, error: "Element not found" });
         }
-        this.elements.delete(id);
         await this.applyDelete(id, true);
         return this.sendJson(res, 200, { success: true });
       }
 
       if (method === "POST" && pathname === "/api/elements/batch") {
+        const view = await this.getViewForWrite(true);
+        if (!view) {
+          return this.sendJson(res, 400, { success: false, error: "No active Excalidraw view" });
+        }
         const body = await this.readJson(req);
         const elements = Array.isArray(body?.elements) ? body.elements : [];
         const processed: ServerElement[] = [];
         for (const element of elements) {
           const normalized = this.normalizeElement(element);
-          this.elements.set(normalized.id, normalized);
           processed.push(normalized);
-          await this.applyCreate(normalized, true);
+          await this.createElementInView(view, normalized, true);
         }
         return this.sendJson(res, 200, { success: true, elements: processed, count: processed.length });
       }
 
       if (method === "POST" && pathname === "/api/elements/sync") {
+        const view = await this.getViewForWrite(true);
+        if (!view) {
+          return this.sendJson(res, 400, { success: false, error: "No active Excalidraw view" });
+        }
         const body = await this.readJson(req);
         const elements = Array.isArray(body?.elements) ? body.elements : [];
-        this.elements.clear();
         const processed: ServerElement[] = [];
+
+        const ea = this.getEA(view);
+        if (!ea) {
+          return this.sendJson(res, 500, { success: false, error: "Excalidraw Automate API not available" });
+        }
+        const existing = ea.getViewElements();
+        if (existing.length > 0) {
+          ea.deleteViewElements(existing);
+        }
+        ea.destroy();
+
         for (const element of elements) {
           const normalized = this.normalizeElement(element);
-          this.elements.set(normalized.id, normalized);
           processed.push(normalized);
-          await this.applyUpdate(normalized, true);
+          await this.createElementInView(view, normalized, true);
         }
         return this.sendJson(res, 200, { success: true, count: processed.length });
       }
@@ -416,5 +486,65 @@ export default class McpExcalidrawBridgeDemo extends Plugin {
     res.statusCode = status;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify(payload));
+  }
+}
+
+class BridgeSettingTab extends PluginSettingTab {
+  private plugin: McpExcalidrawBridgeDemo;
+
+  constructor(app: App, plugin: McpExcalidrawBridgeDemo) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    containerEl.createEl("h2", { text: "MCP Excalidraw Bridge" });
+
+    new Setting(containerEl)
+      .setName("Enable server")
+      .setDesc("Start the local bridge REST API server.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.serverEnabled).onChange(async (value) => {
+          this.plugin.settings.serverEnabled = value;
+          await this.plugin.saveSettings();
+          await this.plugin.updateProxyServer();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Server host")
+      .setDesc("Bind address for the bridge server.")
+      .addText((text) =>
+        text
+          .setPlaceholder("127.0.0.1")
+          .setValue(this.plugin.settings.serverHost)
+          .onChange(async (value) => {
+            const trimmed = value.trim();
+            this.plugin.settings.serverHost = trimmed.length > 0 ? trimmed : DEFAULT_SETTINGS.serverHost;
+            await this.plugin.saveSettings();
+            await this.plugin.updateProxyServer();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Server port")
+      .setDesc("Port for the bridge server.")
+      .addText((text) =>
+        text
+          .setPlaceholder(String(DEFAULT_SETTINGS.serverPort))
+          .setValue(String(this.plugin.settings.serverPort))
+          .onChange(async (value) => {
+            const parsed = Number(value);
+            if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 65535) {
+              return;
+            }
+            this.plugin.settings.serverPort = parsed;
+            await this.plugin.saveSettings();
+            await this.plugin.updateProxyServer();
+          }),
+      );
   }
 }
