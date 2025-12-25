@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild main.ts --bundle --external:obsidian --format=cjs --outfile=main.js",
-    "dev": "esbuild main.ts --bundle --external:obsidian --format=cjs --outfile=main.js --watch"
+    "build": "esbuild main.ts --bundle --external:obsidian --format=cjs --platform=node --outfile=main.js",
+    "dev": "esbuild main.ts --bundle --external:obsidian --format=cjs --platform=node --outfile=main.js --watch"
   },
   "devDependencies": {
     "@types/node": "^20.11.30",
